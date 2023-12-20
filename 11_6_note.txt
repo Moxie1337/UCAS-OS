@@ -1,0 +1,31 @@
+why syscall0 all inline??
+
+first : pause & folk no linine(no inline, we have to )
+inline func:
+original func: call -> push eip to stack
+
+
+priv 3,process0 invoke fork() first. stack : eip -> fork()
+after finished(function dead) ->fork() pop, stack now empty
+
+
+当时进程0给进程1传递的eip是当时进程0的eip(当时eip指向的是fork(),因此进程1的栈中也同样压了 eip -> fork())
+copy_process == eax = 0; eip -> fork()
+
+copy_process copy page_table & tss
+eip -> syscall0 == fork()
+
+
+
+
+
+2 question
+1. is there 2 stack used in this process? only one phy used, but actually process1's page_table as same as process0(cause copy_process).
+2. is there process0,PRIV3 user stack? yes
+
+
+
+
+do_timer 时钟中断
+cpl current prov, do_timer在内核状态下,return(do nothing) 不发生进程调度.
+如果进程0在fork()返回后立刻发生时钟中断(3特权)，之后会发生写时复制,因此会导致依旧能够正常跑通(进程1能够继续指向fork()的返回值，之后能继续跑通)

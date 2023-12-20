@@ -1,0 +1,76 @@
+copy_men 调用 copy_page_table
+copy_process 调用 copy_mem
+sys_fork 调用 copy_process
+
+--copy_process 后半段
+struct * task_struct filp[20] 一个进程最多打开20个文件
+往下都是与文件有关
+
+current 指向当前进程 task_struct的指针
+
+sched_init 创建进程0的tss和ldt (给所有gdt的task分配了空间)
+
+之后再次给进程1创建tss与ldt, 之后进程1具备运行条件
+p->state TASK_RUNNING 就绪态,只差进程调度
+
+return last_pid 这里表示进程已经创建完成
+find_empty_process last_pid 返回了空task数组的下标
+
+----
+_sys_fork
+.align 2 两个字对齐
+addl $20, %esp 清栈, 20 = 4 * 5,栈顶指针向上pop五个
+把自己入栈的清空(_copy_process 之前压了五个站, )
+
+ret,目前是0特权状态,并未有特权级变化
+
+---
+_system_call 调用 _sys_fork
+
+_system_call 在 call _sys_call_table的时候未清栈
+
+页目录表项在head.s 的时候创建了页目录表项(有5个(一个页目录表,4个页表
+
+---_system_call
+fork(last_pid = 1) 返回的 eax = 1
+pushl %eax
+state current(进程0) task_struct指针的state,这里state=0是就绪态
+cmpl $0, state(%eax) 判断state(加入进程0把时间片跑完了,则要进行调度(要跑reschedule))
+
+call = push + jmp 函数调用
+
+判断是否是进程0
+cmpl _task(task数组,找到头地址的元素), %eax
+
+iret 返回到int0x80 systemcall0调用的int0x80
+由此返回到3特权
+----main.c
+_system_call 通过eax返回last_pid = 1
+fork 调用 
+
+for(;;) pause()
+
+是用_call_system_table调用的 sys_pause()
+---sys_pause()
+current是进程0,但是目前一共有两个进程,两个进程都是就绪态,进程0的内核态正在运行中
+schedule()
+----schedule()
+
+struct task_struct **p 指针的指针
+指向task数组
+p = &task[64]
+
+next 下一个进程
+调度的原则 进程是就绪态+时间片最长(这里优先级折算成时间片,并不单独计算)
+找到时间片最长的进程下标next
+switch_to(next)
+如果是当前进程,则不需要额外执行 cmpl %%ecx, _current
+tss 调度是需要保存断面(保存寄存器的值)
+ljmp %0 跳转到 %0(&__tmp.a),即tss段(为什么跳到数据段?).这里我们只需要段选择子,因为我们直接读取tss的寄存器值(eip等),直接恢复了进程1tss段,因此开始执行进程1(后续代码不执行).执行ljmp需要把进程0的数据存到tss0中,之后再恢复tss1的值.
+那么进程1指向谁了? fork() int0x80(_systemcall0)的下一行
+copy_process中,p->tss.eip = eip(这里的eip指的是进程0的eip)
+
+此时已经走了2次int0x80 一次fork一次pause,这里是fork的时候存下的eip
+p->tss.eax = 0(因此返回的__res = 0) !fork() = 1,因此执行main.c 的init()
+static 只在当前文件存在
+能否去掉inline?

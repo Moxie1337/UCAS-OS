@@ -1,0 +1,123 @@
+-------
+bread 技术路线
+进程0的init() -> setup() -> bread()
+ll_rw_block
+进行同步  我们没找到现成的缓冲块,但是找到空闲的缓冲块了。但我们不能直接使用缓冲块,因为缓冲块上还没有数据。因此我们要同步数据。
+
+lock_buffer 中cli() sti()是防止硬件方向的；bh->b_lock=1防止进程方向的竞争
+
+lock_buffer 等的是一个缓冲块
+sleep_on 等待的是整个缓冲块
+
+-------
+add_request 要把请求项上链
+cli()害怕的是硬盘方向的中断
+
+req->hb->b_dirt = 0(考虑BADNESS)从这之后我们就要将硬盘写到缓冲区了
+store 写操作
+blk_dev 包含七项blk_dev_struct
+blk_dev_struct 包含请求项处理函数以及当前的请求项；我们在do_hd_init等将硬盘的请求函数挂载到blk_dev上，但是我们并没有挂载当前请求项
+
+因此我们在之后调用请求项处理函数以及当前请求项(req,这个是我们之前make_request找到的空闲缓冲块)
+
+
+---
+do_hd_request 硬盘的请求处理函数
+hd_out   intr_addr
+给硬盘发命令，硬盘有DMA模式和PIO模式
+PIO模式让硬盘给主机发送中断,从硬盘中的小缓存发送给主机的buffer中
+DMA模式
+
+一个命令一个块,一个块2个扇区。但实际上我们还是以扇区位操作单位，所以我们要跑两次
+
+在make_request中我们定义了nr_sectors = 2(一个缓冲块有2个扇区),这是在请求项上提出的要求。
+nsesc = CURRENT->nr_sectors 我们在do_hd_request中得到的nr_sectors也是2,因此传递给hd_out的nsec也是2
+
+因此hd_out执行完后开始return,目前处于内核态。hd_out <-- do_hd_request <-- add_request <-- make_request <-- ll_rw_block <-- bread 我们跳回到bread(sys_setup(),进程1的内核态，最早是进程1的init())
+于是我们返回到bread
+
+-------
+wait_on_buffer
+bread下一个函数是wait_on_buffer 在这之前我们在make_request中加了锁(bh->block=1)
+wait_on_buffer 中 sleep_on(&bh->b_wait)bh是buffer_head,这里的b_wait类型是任务数组,因此目前是进程1在等待。但wait_on_buffer是对任意一个缓冲块都适用,因此会出现多个进程等待的情况。
+
+sleep_on 参数是 struct task_struct **p 是从task数组这个层面上考虑的
+if(!p) *p在这里是b->wait,p是&b_wait(在初始化后到目前没动过,为NULL).目前来说*p(b_wait)的值为空
+由于b_wait是buffer_head的一个元素，在buffer_init把b_wait清空(NULL)，目前也是空(因为在此之前没有对缓冲区进行操作)
+tmp = *p，这里的tmp是空(buffer_init的初值)
+*p = current(当前是进程1),*p指向进程1
+
+要判断当前进程是不是进程0，进程0不能sleep
+
+我们在 sys_pause中 将进程0设置为挂起状态,但目前进程1也挂起了
+目前我们要进行schedule()
+
+在schedule的下半部分 c=-1,next=0
+if (c) break 为真(非0为真，这里的-1为真，并且与其他的正数时间片都不一致)，因此我们直接走到switch_to(next) 默认切换到进程0
+因此虽然我们两个进程都挂起了,但是我们仍旧切换到进程0去
+当时进程0的eip实际上就是switch_to 函数中 ljmp的下一行
+
+当时进程0创建完进程1之后，返回到fork()然后走到了pause(),然后走到sys_pause()，自己挂起进入schedule并switch_to进程1，因此ljmp的下一行存到进程0的eip中。
+process 0 (我们忽略了切换到进程1以及进程1切换回进程0的过程): fork() -> pause() ->syscall0(pause) -> int0x80 -> _system_call -> sys_pause(current->state interruptable) -> schedule() -> switch_to() -> schedule() -> sys_pause()-> _system_call -> iret -> pause()
+
+
+现在我们返回到pause后，此时我们是进程0的用户态。之后我们又走到sys_pause，这里是进程0的内核态，我们在此之前进程0一直是task_interrupt.于是我们和之前的流程是一致的，依旧走到schedule里，并且要切换到进程0(现在是进程0切换到进程0)
+但实际上并不能再次切换,je 1f 直接跳出switch_to. 于是进程0一直切换自己
+
+目前来说相当于发动机怠速,我们一直空转为的是等待新的中断(***********现在是在等待硬盘中断)
+
+------------
+system_calls.s
+终于在某个时刻，我们等到了硬盘中断 _hd_interrupt
+硬件压五个寄存器......
+
+重点 xorl %edx, %edx edx清零
+xchgl _do_hd, %edx , 在hd_out 中 do_hd = intr_addr， 是read_interrup的函数指针(hook)
+我们交换edx的值 -> %edx 存储的就是read_intr的函数指针，同时把_do_hd清零
+这里的intr_addr 是函数指针 
+call *%edx 相当于函数调用read_intr
+
+这里的请求处理函数 实在do_hd_request中规定的，根据目前状态(READ),于是当前挂载的就是read_intr
+------------
+read_intr
+port_read PIO模式，从硬盘小缓存往目标缓冲区读数据
+我们每一次只读一个扇区,之后我们再次给do_hd挂载read_intr函数.我们只用发一次中断，就能读取两个扇区的数据。
+
+iret打断的是进程0的怠速(for(;;)pause())，但打断之后(硬盘中断后读一个扇区的数据后)继续执行for pause
+于是我们在第二次执行read_intr时，我们执行end_request(1)
+
+------------
+read_intr 调用 end_request
+end_request(1) 这里的1给b->uptodate
+同步完毕,缓冲块和硬盘的数据一致了。目前操作缓冲块与操作硬盘是一致的(数据和设备号块号都一致了)
+
+请求项 管理 缓冲块 与 硬盘快之间的关系
+CURRENT表示当前请求项的意思, 所以当前请求项管理的缓冲块(CURRENT->bh->b_update) updodate=1
+我们在之前给要读缓冲块的进程加了锁(防止读错了)目前给进程1加了锁 unlock_buffer
+weak_up(&bh->b-wait)
+if(p && *p)
+	(**p.state) = tmp (why tmp???) 
+
+p &b-wait *p &b-wait **p task_struct
+
+wake_up(&CURRENT->waiting) 在linux0.11里没用；某一个请求项在被占用，但被其他进程占用
+wake_up(&wait_for_request) 等请求项数组(所有请求项都被占满,或者说写操作但只能用2/3的请求项 只能等待有请求项释放)
+CURRENT->dev = -1 请求项为-1(表示请求项是否被占用，dev>0表示被占用)  与 make_request 中 if(req-> dev < 0) 有关联
+CURRENT = CURRENT->next 请求项链表脱钩，但是仍在数组上
+-------------------
+read_intr调用do_hd_request
+一旦一次设备发生同步，同一类主设备上所有的数据进行同步
+因为一个主设备只有一个请求项处理函数 do_hd_request()
+
+返回到bread
+---------
+if(bh-b_updodate)
+	return bh 如果缓冲区与硬盘的数据同步了,则返回bh(可以用了)
+
+-----------------
+进程想读缓冲块的时候,需要给进程加锁
+加了锁不代表没有现成的缓冲块，先进去然后再同步数据
+查找现成的缓冲块就找链上有没有相应的缓冲块
+
+
+buffer_head是全局的变量 在buffer_init里定义的,因此buffer_head 不会因为进程切换消失

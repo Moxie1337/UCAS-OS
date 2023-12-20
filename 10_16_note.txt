@@ -1,0 +1,61 @@
+现代操作系统使用分页管理内核进程与用户进程,内核代码与用户代码的基址与限长相同;而linux中每个进程平分线性地址.
+
+head.s _stack_start -> 指向进程0的位置 user_stack 与 init_stack 的位置一样
+
+proc 0 task_union:
+INIT_TASK -> task_struct
+stack 在head.s的_stack_start中做出来
+
+proc0 代码段 基址限长  base on ldt(address low->high)
+kernel特权级0,顶头(jmpi 0, 8),随即跟着 task_struct
+
+head.s 中规定了gdt(_gdt)的数据,基址限长可求
+内核代码段 段基址段现场特权级
+~数据段 ~
+进程0 ~
+
+user_stack 给用户开了栈(实际上就是进程0的用户栈), main调用 sched_init 在其中运行
+
+ltr(0) cpu中的寄存器(load_task_register) 指向 进程0的tss的地址,之前没有值.从这之后,进程0对OS可识别
+lldt(0) ldtr 指向 进程0的ldt
+此后OS真正激活,进程0处于就绪态(必须有task,stack组成的 task_union并且,task_union 存到task数组里,才认为进程创建完成)
+----
+set_system_gate 系统调用 int0x80
+----
+buffer_init 块设备(外设)的缓冲区,内存中开了一个空间(内核数据段内)
+buffer_head 根据物理内存大小,动态设置块的个数(缓冲区大小为1k)
+
+buffer_head 是双向环链表 + 十字交叉链表,每一个缓冲块由一个buffer_head指向
+
+虚拟盘(内存)没有中断
+----
+sti() 运行此函数是特权0
+----
+move_to_user_mode
+
+cpu定义的压栈顺序 ss esp eflags cs eip
+iret 中断返回,于是直接手动压入五个栈
+movl %%esp, %%eax\n\t 0特权的栈(esp0) 给 3特权的栈(esp3),尽管是不同的特权栈顶指针,但使用的是同一块栈空间.但是由于ss不一样(通常来说不一样,栈段不一样)所以不能说这两个是相同的栈. -> 需要计算进程0在3特权的ss段 与 内核ss段
+pushl $0x17\n\t 10111  3特权的数据段 -> ss
+pushl %%eax\n\t esp 3特权
+pushfl elfags
+0xf 1111 用户代码段 cs
+push eip
+iret之后,特权翻过来(3特权),并且代码指向进程0,iret后第一行,进程0开始运行
+
+函数调用 中断 最大区别: 不知道中断什么时候执行,因此中断只能硬件压栈(函数的话可以编译器或者手动压栈)对于X86复杂指令集,压五个栈 <-> copy_process
+在入栈之后(在cpu看来就像真发生了中断)
+$1f 跳转到1:
+
+inline 能做语法语义检查,避免函数跳转,还能可读性好 
+static 在函数前 
+
+0特权 栈
+  ↑
+iret
+  ↓
+(在之后0特权的栈就清空,以后也不会存在了,活儿已经干完了)
+进程0的3特权 用户栈
+在这里缺少进程0的内核栈(跑系统调用时需要,其中的数据不一样,每个进程的内核栈不能共用)
+内核栈在 task_union 的 头指针里
+

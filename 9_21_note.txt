@@ -1,0 +1,46 @@
+MEMORY 1M
+使用BIOS -> CIOS (CPU reg CS:0xFFFF IP:0x0000)
+bios 中断向量表(0-1K)与服务程序(0x19中断后启动)
+             BIOS
+bootsect.s————————->MEMORY(一个扇区的内存, 512)
+之后将操作全交给linux
+
+BOOTSEG(0X07C0), 执行自己代码的同时拷入到 INITSEG
+SEG 16BIT -- INITSEG(0x9000), after add bias -> (0x90000)
+
+		BOOTSEG
+
+0X13 控制加载内存的位置
+0X19 比较严格,目的地为0x07C00
+
+SETSEG 0X9000
+SETUPSEG 0X9020
+SYSSEG 0X1000
+在bootsect执行完后,指针跳到0X9020执行setup.s,之后覆盖bootsect用于机器系统数据(需要电池)
+
+保护模式(PL32BIT)       实模式(20BIT)
+    IDT             中断向量表(0-0x003FF)
+		CS(段选择子)         CS(段基址)
+进入保护模式后,从16bit->32bit的新指令,这之后需要关中断阻止响应(不处理指令)
+
+IO中断 有专用的中断信号
+
+
+[kernel] 0x10000(head.s at front)
+
+cli后,把实模式的中断向量表覆盖,(保护模式的中断向量由reg保存)
+目前head.s在memory开头
+
+在保护模式下,IDTR(中断描述符寄存器) 中断描述符(IDT)由CPU规定
+向量CS:IP 跳转到指定的中断服务, 因此IDTR映射到向量CS:IP(由此是保护模式的中断)
+
+GDTR(全局描述符表寄存器)的基地址设置在0X90200(setup.s)
+
+memory由北桥控制,CPU执行取值,将取值从20-32bit。总线上打开a20
+
+       实模式                    CR0-reg
+EFLAGS(标志寄存器) IF IOPL       
+
+jmpi 0, 8   => bias 0, cs ...001000  特权级(00)特权 0 (GPT,1LDT) 1,bias of table
+bias => 1:内核代码段 2:数据代码段
+跳到了0特权的内核代码段的0偏移地址(HEAD.S在头部)

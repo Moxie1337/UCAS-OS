@@ -1,0 +1,100 @@
+------------
+sys_open
+打开文件一定是某个用户进程打开文件,进程在task_struct中filep[20]里定义了一个空闲项
+filep中的元素是指向文件对象的指针
+
+file_table[64]整个kernel只有一个,每个元素是一个file对象，其中可以有重复的
+
+inode_table[32]存储的是inode对象,其中是不重复的。
+
+先要把这三者关联起来 进程中的filep指向file_table的对象，对应的file_table对象指向inode_table的inode
+上述三者关联起来说明文件正式地打开了
+
+sys_open 返回值 fp,就是进程中filep中的数组下标(句柄)
+
+for 0->NR_OPEN(20)
+if !(current -> filP[fd])
+	break
+
+我们遍历进程 filp中的空闲项
+之后我们再次寻找file_table[64]中的空闲项(通过count表示) f
+
+（current->filp[fd] = f (这里)） -> f_count++; 这里面把filp和file_table中相关联，并且引用计数+1
+
+之后从硬盘中
+
+open_namei 找到文件的i节点，打开这个i节点成功的标志是返回0
+
+f->f_inode = inode 把inode_table与file_table关联起来
+
+
+--------------
+open_namei
+3个重点函数
+dir_namei 找到树梢的i节点
+find_entry 把目录项所在的块读到缓冲区中
+iget
+
+打开指定路径名(特定方式，只读等用户命令，也包括文件名) 来找到i节点
+
+每个文件都有数据，目录文件的数据就是目录项，每一个目录项又指向一个文件。
+我们管最后一个目录文件(指向目标文件的上一级目录文件的i节点)对应的i节点就叫zhishaoi节点
+
+dir_namei 返回 枝梢节点 dir
+
+目录项的数据结构。目录项实际上也是文件的数据,也是按照块进行存储的
+struct dir_entry
+{
+	unsigned short inode; 实际上是inode_number,i节点位图中的比特偏移，因此可以找到inode 2byte
+	char name[NAME_LEN]; 这一节的文件名称 14byte
+}
+
+目录项的数据结构 struct dir_entry * de
+
+在内存里因为我们有指针,可以通过目录项找到相应的inode，但是在硬盘上我们没有指针，那么我们该怎么找呢？
+答:i节点位图 和i节点对应，使用 inode_number i节点比特偏移,相当于在硬盘上构建了一个指针
+因此我们可以通过inode_number找到对应的inode,因此可以通过目录文件(枝稍inode)找到文件inode+
+
+文件读取流程
+--------
+硬盘阶段
+*****任何外设皆为文件，任何文件都有i节点，任何i节点都要通过i_mode进行区分。因此为了区分目录文件和目标文件,他们的imode是不一样的
+枝稍inode是在硬盘中,按照块进行存储.把其中的目录项所在的块(izone)读到缓冲区里
+--------
+之后再缓冲区里我们找到目标文件的i节点
+然后我们通过iget把文件的信息传给indode_table上
+最后把文件所在的inode上到inode_table[32]上
+
+我们通过i节点就能找到设备号以及i_num,反之
+
+最终返回目标文件的inode
+
+
+---------
+dir_namei
+get_dir 如果第一个文件字符是/,则从绝对路径(root)开始遍历；如果不是空也不是/，则从相对路径(pwd)开始遍历
+get_fs_byte get_fille_system_byte 我们要把字符串常量一个一个地寻找，每一次过一个字符
+如果不是目录文件,则return NULL
+
+有两个变量 path_name 和 this_name
+path_name 作为遍历地变量,我们要找到非/和非空地名称。
+然后this_name存储的是这一节的首地址
+
+if(!c) 这里就是返回枝稍i节点(因为我们在找目标文件的i节点时，我们需要返回前一个目录i节点)
+	return inode 我们返回前一个inode(正常文件路径就在这里结束了)
+
+if(!(bh...)) 这个循环是在/结束的。我们要找到还有目录项的所在的块(this_name)
+把有设别号和inumber号的inode找到
+---------------
+find_entry
+
+超级块中存储了i节点位图,逻辑块位图和i节点的范围,这样便于我们找到位图(以后都需要这么找)
+一个设备一个文件系统,一个文件系统在超级块中占一个位置。由于文件系统常用，除非umount,否则不出缓冲区
+m_node 里 中i_size 表示i节点所在文件的大小
+
+目录文件 / 一个目录项的大小 = 一共有多少个目录项
+
+entries    sizeof()
+
+
+

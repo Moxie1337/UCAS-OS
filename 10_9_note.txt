@@ -1,0 +1,80 @@
+cli 关中断, sti 开中断 实模式->保护模式 中断机制
+
+rd_init blk_dev 块设备,设备管理
+ramdisk, hd, sd ..   
+
+request_fn 请求项,挂载在设备管理的blk_dev上
+
+mem_init mem_map 记录页的使用情况, 单位为page,使得物理地址与逻辑地址 一一对应
+如 c malloc用来分配内存,于是在mem_map上记录引用计数(可以多个程序使用同一页,内存共享)
+
+------
+trap init
+设置保护模式下的idt程序,之前必须要关中断
+
+如果中断时,CPU立刻找到IDTR,根据索引找到IDT,IDT(基址)+GDT(偏移)加起来,找到中断服务程序(内核代码段,jmpi 0,8)
+IDTR(CPU中) -> IDT,CPU认定
+
+IDT格式 IA-32
+
+dpl 描述符特权级,查IA32什么意思
+用户系统调用发起(int 80),3特权的应用程序
+
+函数参数解析
+_set_gate(0,   type,  dpl, 		&divide_zero)  is gcc extend asm
+         /       \      \							\
+     &idt[0]     15			0			addr func divine_zero service    
+	idt table     1111   0 特权        addr(edx 32bit)
+
+asm参数解析
+
+asm::data
+%0:i %1:o %2:o
+
+"i" imm
+"o" offset
+"d" edx
+"a" eax -> "a" (0X114514) eax中带的值为0x114514
+
+dx 是 edx的低字,因此原始的中断服务程序地址在edx中,
+现在reg上做
+1.dx -> ax edx的低字给eax的低字(存起来一部分),详细看IDT格式
+eax的低字 为0x0000,高字为0x0008, eax高字为段选择子8 => 内核代码段
+2.%0(imm) -> dx => edx的低字为立即数的值
+
+上述为IDT表项,在内存中 &idt[0] &gate_addr
+3.eax低位->表项的首地址
+4.edx低位->表项的第二个地址.错4个字节，一个reg的大小
+
+-----
+块设备
+blk_dev_init
+NR_REQUEST = 32, why? 
+struct request 请求项,管理进程数据(内存)与外设读写的操作
+request 是链式数组
+array speed up 200times than link
+
+-------
+字符设备,标准输出+标准输入(之和字符的IO有关
+chr_dev_init
+
+-------
+xxx打字机
+tty_init 
+
+0x90000 0x90020
+机器系统数据
+
+--------
+sched_init
+与系统调用有关,与进程有关,与gdt与ldt有关
+一个进程占gdt描述符表中的两项
+设置 gdt
+
+第一None
+第二项内核代码段的段描述符
+第三      数据段 
+第四None
+用户进程
+
+和ldt

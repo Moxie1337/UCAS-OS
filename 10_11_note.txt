@@ -1,0 +1,62 @@
+malloc return char*(old version, actually byte ptr) now should be void*
+malloc memory should not data type
+
+---------
+sched_init
+one process take 2 token 一个进程占2个描述符(gdt),上限64个进程
+进程共总128 + 4(null, DS, CS, NULL)
+								3       ->        0
+gdt是段描述符,特权级是基于段的. 地址是线性地址
+bios -> head.s, 页目录表的基地址(cr3),页表地址 描述的是物理地址
+10            10        12
+页目录表项    页表      页表项
+
+每个进程中都存在两个段描述符:LDT和TSS.
+LDT段 NULL 代码段描述符 数据段描述符
+       0         1           2
+LDT段的0NULL与GDT段的0NULL一致,大体上来说也较相似
+
+TSS任务状态段
+单核 时间片轮转
+
+ss0:esp0 栈顶指针
+esp0 esp1 esp2 esp 与特权级有关,不同特权级所有的栈不同
+
+按照机器指令(ASM)细粒度切换进程
+TSS EFLAGS 与进程有关的都需要保存
+
+CPU 层面上, 相同特权级的数据和代码可以访问,但从OS角度(授权规则来看)是不能访问的
+
+cs:eip   
+jmpi 0, 8
+3特权的GDT,cs都是 1111,因此写不出来能跳转到其他段的转移命令
+1111:1111 -> 1111
+
+panic 调用即系统挂掉
+
+#5 LDT0 gdt + 5
+#4 TSS0 gdt + 4
+#3 NULL
+#2 DS
+#1 CS
+#0 NULL
+GDT TABLE
+
+
+task_struct
+1k + 4k
+
+union task_union 内核栈
+内核代码压栈绝对不会覆盖task_struct
+
+LDT <-> task_struct组成
+{
+tss
+ldt
+task struct
+}
+
+task[i] from 1 -> 64 task数组,存放task_struct的指针，用于进程调度
+全局初始化定义,值初始化第一个任务指针
+
+#define INIT_TASK 表示进程0的一个结构(严格按照 task_struct)，还没有具体实例化,父进程创建子进程
